@@ -12,9 +12,11 @@ __email__ = "martin.dimondo@gmail.com"
 
 
 SCREEN_RESOLUTION = (64, 32)
-
+FONT_ADDRESS = 0x0050
+FONT_ROWS = 5
 
 def clear():
     pass
 
-
+def get_font_address(vx):
+    return FONT_ADDRESS + vx * FONT_ROWS 

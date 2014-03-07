@@ -42,8 +42,8 @@ class CPUEmulator(object):
         self.index_reg = 0
         self.v = [0x0] * CPU_REGISTERS
         self.stack = []
-        self.stack_pointer = 0x0
         self.op = None
+        self.keys = []
     
     def load_into_mem(self, mem):
         self.mem = mem
@@ -101,16 +101,14 @@ class CPUEmulator(object):
                 self._op_pop_stack()
         elif instr == 0x1000:
             self._op_jump(util.nnn(op))
-        elif instr == 0xA000:
-            self._op_set_i(util.nnn(op))
         elif instr == 0x2000:
             self._op_jump(util.nnn(op))
         elif instr == 0x3000:
-            self._op_skip_equal(util.x(0xF00), util.nn(0xFF))
+            self._op_skip_equal(util.x(op), util.nn(op))
         elif instr == 0x4000:
             self._op_skip_equal(util.x(op), uti.y(op))
         elif instr == 0x5000:
-            self._op_skip_eq_reg(util.x(0xF00), util.y(0xF0))
+            self._op_skip_eq_reg(util.x(op), util.y(op))
         elif instr == 0x6000:
             self._op_set_reg(util.x(op), util.nn(op))
         elif instr == 0x7000:
@@ -130,11 +128,101 @@ class CPUEmulator(object):
             elif subop == 0x5:
                 self._op_sub_vx_vy(util.x(op), util.y(op))
             elif subop == 0x6:
-                self._op_shift_vy(util.x(op), util.y(op))
+                self._op_shift_right(util.x(op), util.y(op))
             elif subop == 0x7:
-                pass
+                self._op_sub_vx_vy_vf(util.x(op), util.y(op))
             elif subop == 0xE:
-                pass
+                self._op_shift_vy_left(util.x(op), util.y(op))
+        elif instr == 0x9000:
+            self._op_jump_noteq(util.x(op), util.y(op))
+        elif instr == 0xA000:
+            self._op_set_i(util.nnn(op))
+        elif instr == 0xB000:
+            self._op_jump_nnn_v0(util.nnn(op))
+        elif instr == 0xC000:
+            self._op_set_vx_rand(util.x(op), util.nn(op))
+        elif instr == 0xD000:
+            self._op_draw_sprite(util.x(op), util.y(op), util.n(op))
+        elif instr == 0xE000:
+            subop = op & 0xF
+            if subop == 0x1:
+                self._op_skip_key_vx(util.x(op), result=False)
+            elif subop == 0xE:
+                self._op_skip_key_vx(util.x(op))
+        elif instr == 0xF000:
+            subop = op & 0xFF
+            if subop == 0x7:
+                self._op_set_vx_delay_timer(util.x(op))
+            elif subop == 0xA:
+                self._op_set_vx_key_pressed(util.x(op))
+            elif subop == 0x15:
+                self._op_set_delay_timer(util.x(op))
+            elif subop == 0x18:
+                self._op_set_sound_timer(util.x(op))
+            elif subop == 0x1E:
+                self._op_add_reg_ind(util.x(op))
+            elif subop == 0x29:
+                self._op_set_i_font(util.x(op))
+    
+    def _op_set_i_font(self, x):
+        self.index_reg = display.get_font_address(self.v[x])
+        self.pc += 2
+        
+    def _op_add_reg_ind(self, x):
+        self.index_reg += self.v[x]
+        self.pc += 2
+            
+    def _op_set_delay_timer(self, x):
+        self.delay_timer = self.v[x]
+        self.pc += 2
+    
+    def _op_set_sound_timer(self, x):
+        self.sound_timer = self.v[x]
+        self.pc += 2
+        
+    def _op_set_vx_key_pressed(self, x):
+        self.v[x] = self.get_key_pressed()
+        self.pc += 2
+    
+    def _op_set_vx_delay_timer(self, x):
+        self.v[x] = self.delay_timer
+        self.pc += 2
+        
+    def _op_skip_key_vx(self, x, result=True):
+        if (self.v[x] in self.keys) == result:
+            self.pc += 2
+        self.pc += 2
+        
+    def _op_draw_sprite(self, x, y, n):
+        sprite = []
+        for cb in range(n):
+            sprite.append(self.mem[self.index_reg])
+            self.index_reg += 1
+        display.draw_sprite(self.v[x], self.v[y], sprite)
+        self.pc += 2
+                
+    def _op_jump_nnn_v0(self, nnn):
+        self.pc = self.v[0] + nnn
+    
+    def _op_set_vx_rand(self, x, nn):
+        import random
+        self.v[x] = random.randint(0xFF) & nn
+        self.pc += 2
+        
+    def _op_jump_noteq(self, x, y):
+        if self.v[x] != self.v[y]:
+            self.pc += 2
+        self.pc += 2
+        
+    def _op_shift_vy_left(self, x, y):
+        self.v[16] = self.v[16] >> 7 # First value
+        self.v[x] = (self.v[y] << 1) % 255
+        self.pc += 2
+
+    def _op_shift_right(self, x, y):
+        self.v[16] = self.v[y] & 0x1
+        self.v[x] = self.v[y] >> 1
+        self.pc += 2
     
     def _op_sub_vx_vy_vf(self, x, y):
         logging.info('Setting V[X] = V[X] - V[Y], V[F] = 1 if V[Y] > V[X]')

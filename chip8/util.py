@@ -1,3 +1,12 @@
+'''
+    Chip8 Util module
+'''
+
+__author__ = "Martin Dimondo"
+__license__ = "Revised BSD"
+__email__ = "martin.dimondo@gmail.com"
+
+
 def x(op):
     return op & 0xF00
 
@@ -11,4 +20,4 @@ def nn(op):
     return op & 0xFF
 
 def nnn(op):
-    return op & 0xFF
+    return op & 0xFFF
