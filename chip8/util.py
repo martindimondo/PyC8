@@ -8,10 +8,10 @@ __email__ = "martin.dimondo@gmail.com"
 
 
 def x(op):
-    return op & 0xF00
+    return (op & 0xF00) >> 8
 
 def y(op):
-    return op & 0xF0
+    return (op & 0xF0) >> 4
 
 def n(op):
     return op & 0xF

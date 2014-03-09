@@ -15,25 +15,29 @@ import logging
 import time
 
 import display
+import keypad
+import memory
 import util
+import pygame
 
 
 CLOCK_RATE = 60 # Run at 60hz
 CPU_REGISTERS = 16
-MEMORY_LIMIT = 4096 # 4k bytes support
-MEMORY_START = 0x200
-STACK_LEVEL = 16
 
-logging.basicConfig(level=logging.DEBUG)
+
+logging.basicConfig(level=logging.INFO)
 
 
 class CPUEmulator(object):
     
     def __init__(self):
-        self.pc = 0 # Program Counter
+        self.pc = memory.MEMORY_START # Program Counter
         self.delay_timer = 0
         self.sound_timer = 0
         self.interrupted = False
+        self.screen = display.Chip8Screen()
+        self.memory = memory.Chip8Memory()
+        self.keypad = keypad.Chip8Keypad()
         self._init_mem()
         self._init_registers()
         
@@ -43,56 +47,56 @@ class CPUEmulator(object):
         self.v = [0x0] * CPU_REGISTERS
         self.stack = []
         self.op = None
-        self.keys = []
-    
-    def load_into_mem(self, mem):
-        self.mem = mem
         
     def _init_mem(self):
-        logging.info("Initializing %s bytes of memory" % MEMORY_LIMIT)
-        self.mem = [0x0] * MEMORY_LIMIT
+        logging.info("Initializing memory")
+        self.memory.write_array(memory.FONT_ADDRESS, display.FONT_SPRITES)
+    
+    def load_program(self, prog):
+        logging.info("Loading program into memory")
+        self.memory.write_array(memory.MEMORY_START, prog)
 
     def main_loop(self):
         logging.info("Running main loop emulator...")
+        clock = pygame.time.Clock()
         while True:
-            start = datetime.now()
-            self.cycle()
-            end = datetime.now() - start
-            time.sleep(1 / CLOCK_RATE - end.total_seconds())
+            clock.tick(CLOCK_RATE)
+            self.screen.update()
+            self.keypad.check_keys()                
+            self.cycle()            
+
+            if self.delay_timer > 0:
+                self.delay_timer -= 1
+                logging.debug('Delay timer: %s' % self.delay_timer)
+
+            if self.sound_timer > 0:
+                if self.sound_timer == 1:
+                    logging.debug('BEEP - Sound timer: %s' % self.sound_timer)
+                    print('\a') # Nonzero value produce a beep in a Chip8
+                            # better ... shoot to the computer speaker
+                self.sound_timer -= 1
+
+            if self.keypad.is_esc_pressed():
+                raise InterruptedException('CPU execution cycle was interrupted')
             
     def cycle(self):
         self.op = self._fetch()
         logging.debug('Current OpCode: 0x%02x' % self.op)
         self._execute(self.op)
-
-        if self.sound_timer > 0:
-            self.sound_timer -= 1
-            if self.sound_timer == 0:
-                logging.debug('BEEP - Sound timer: %s' % self.sound_timer)
-                print('\a') # Nonzero value produce a beep in a Chip8
-                        # better ... shoot to the computer speaker
-                        
-        if self.delay_timer > 0:
-            self.delay_timer -= 1
-            logging.debug('Delay timer: %s' % self.delay_timer)
-        
-        if self.interrupted:
-            raise InterruptedException('CPU execution cycle was interrupted')
-    
-    def interrupt(self):
-        self.interrupted = True
         
     def _fetch(self):
         '''
             Fetch opcode bytes
         '''
-        byte_a = self.mem[self.pc] << 8 # shift to left 8 bits
-        byte_b = self.mem[self.pc + 1]
+        byte_a = self.memory.get_byte(self.pc) << 8 # shift to left 8 bits
+        byte_b = self.memory.get_byte(self.pc + 1)
         return byte_a | byte_b
 
     def _execute(self, op):
         instr = op & 0xF000 # extract the operation
         logging.debug('Instruction: 0x%02x ' % instr)
+        tmppc = self.pc
+        
         if instr == 0x0:
             sec_byte = op & 0xF
             if sec_byte == 0x0:
@@ -102,11 +106,11 @@ class CPUEmulator(object):
         elif instr == 0x1000:
             self._op_jump(util.nnn(op))
         elif instr == 0x2000:
-            self._op_jump(util.nnn(op))
+            self._op_call(util.nnn(op))
         elif instr == 0x3000:
             self._op_skip_equal(util.x(op), util.nn(op))
         elif instr == 0x4000:
-            self._op_skip_equal(util.x(op), uti.y(op))
+            self._op_skip_equal(util.x(op), util.nn(op), ifeq = False)
         elif instr == 0x5000:
             self._op_skip_eq_reg(util.x(op), util.y(op))
         elif instr == 0x6000:
@@ -163,9 +167,33 @@ class CPUEmulator(object):
                 self._op_add_reg_ind(util.x(op))
             elif subop == 0x29:
                 self._op_set_i_font(util.x(op))
-    
+            elif subop == 0x33:
+                self._op_set_bcd_vx(util.x(op))
+            elif subop == 0x55:
+                self._op_set_mem_v0_vx(util.x(op))
+            elif subop == 0x65:
+                self._op_fill_v0_vx(util.x(op) + 1)
+
+                
+    def _op_set_mem_v0_vx(self, x):
+        for i in range(x):
+            self.memory.write_byte(self.index_reg + i, self.v[i])
+        self.pc += 2
+        
+    def _op_fill_v0_vx(self, x):
+        for i in range(x):
+            self.v[i] = self.memory.get_byte(self.index_reg + i)
+        self.pc += 2
+        
+    def _op_set_bcd_vx(self, x):
+        val = int(self.v[x])
+        self.memory.write_byte(self.index_reg, val / 100)
+        self.memory.write_byte(self.index_reg + 1, val % 100 / 10)
+        self.memory.write_byte(self.index_reg + 2, val % 100 % 10)
+        self.pc += 2
+            
     def _op_set_i_font(self, x):
-        self.index_reg = display.get_font_address(self.v[x])
+        self.index_reg = self.memory.get_font_address(self.v[x])
         self.pc += 2
         
     def _op_add_reg_ind(self, x):
@@ -181,7 +209,7 @@ class CPUEmulator(object):
         self.pc += 2
         
     def _op_set_vx_key_pressed(self, x):
-        self.v[x] = self.get_key_pressed()
+        self.v[x] = self.keypad.wait_for_keypress()
         self.pc += 2
     
     def _op_set_vx_delay_timer(self, x):
@@ -189,16 +217,16 @@ class CPUEmulator(object):
         self.pc += 2
         
     def _op_skip_key_vx(self, x, result=True):
-        if (self.v[x] in self.keys) == result:
+        if self.keypad.is_keypressed(self.v[x]) == result:
             self.pc += 2
         self.pc += 2
         
     def _op_draw_sprite(self, x, y, n):
         sprite = []
         for cb in range(n):
-            sprite.append(self.mem[self.index_reg])
-            self.index_reg += 1
-        display.draw_sprite(self.v[x], self.v[y], sprite)
+            sprite.append(self.memory.get_byte(self.index_reg + cb))
+        collision = self.screen.draw(self.v[x], self.v[y], sprite)
+        self.v[15] = collision
         self.pc += 2
                 
     def _op_jump_nnn_v0(self, nnn):
@@ -206,7 +234,7 @@ class CPUEmulator(object):
     
     def _op_set_vx_rand(self, x, nn):
         import random
-        self.v[x] = random.randint(0xFF) & nn
+        self.v[x] = random.randint(0, 0xFF) & nn
         self.pc += 2
         
     def _op_jump_noteq(self, x, y):
@@ -215,32 +243,32 @@ class CPUEmulator(object):
         self.pc += 2
         
     def _op_shift_vy_left(self, x, y):
-        self.v[16] = self.v[16] >> 7 # First value
+        self.v[15] = self.v[15] >> 7 # First value
         self.v[x] = (self.v[y] << 1) % 255
         self.pc += 2
 
     def _op_shift_right(self, x, y):
-        self.v[16] = self.v[y] & 0x1
+        self.v[15] = self.v[y] & 0x1
         self.v[x] = self.v[y] >> 1
         self.pc += 2
     
     def _op_sub_vx_vy_vf(self, x, y):
         logging.info('Setting V[X] = V[X] - V[Y], V[F] = 1 if V[Y] > V[X]')
-        self.v[16] = 1 if self.v[y] > self.v[x] else 0
+        self.v[15] = 1 if self.v[y] > self.v[x] else 0
         self.v[x] = self.v[x] - self.v[y]
         self.pc += 2
         
     def _op_add_vx_vy(self, x, y):
         logging.info('Setting V[X] = V[X] + V[Y]')
         val = self.v[x] + self.v[y]
-        self.v[16] = 1 if val > 255 else 0
+        self.v[15] = 1 if val > 255 else 0
         self.v[x] = val % 256
         self.pc += 2
     
     def _op_sub_vx_vy(self, x, y):
         logging.info('Setting V[X] = V[X] - V[Y]')
         val = self.v[x] - self.v[y]
-        self.v[16] = 1 if val < 0 else 0
+        self.v[15] = 1 if val < 0 else 0
         self.v[x] = val % 256
         self.pc += 2
         
@@ -264,7 +292,7 @@ class CPUEmulator(object):
         self.v[x] = self.v[y]
         self.pc += 2
         
-    def _op_add_reg(x, nnn):
+    def _op_add_reg(self, x, nnn):
         logging.info('Adding NNN to V[X]')
         self.v[x] = (self.v[x] + nnn) % 256
         self.pc += 2
@@ -280,7 +308,7 @@ class CPUEmulator(object):
         
     def _op_clear(self):
         logging.info('Clearing screen')
-        display.clear()
+        self.screen.clear()
         self.pc += 2
     
     def _op_jump(self, address):
@@ -289,12 +317,13 @@ class CPUEmulator(object):
     
     def _op_call(self, address):
         logging.info('Calling subroutine at 0x%2x address' % address)
+        self.pc += 2
         self.stack.append(self.pc)
         self.pc = address
     
     def _op_skip_equal(self, x, nnn, ifeq=True):
         logging.info('Skip if V[X] === NNN is %s' % ifeq)
-        if ifeq == self.v[x] == nnn:
+        if (self.v[x] == nnn) == ifeq:
             self.pc += 2
         self.pc += 2
     
@@ -304,11 +333,10 @@ class CPUEmulator(object):
             self.pc += 2
         self.pc += 2
     
-    def _op_set_reg(x, nnn):
+    def _op_set_reg(self, x, nnn):
         logging.info('Set NNN to cpu reg V[x]')
         self.v[x] = nnn
         self.pc += 2
-
 
 class InterruptedException(Exception):
     pass
