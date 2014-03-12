@@ -58,7 +58,6 @@ class Chip8Screen(object):
         
     def draw(self, x, y, sprite):
         flipped = 0
-        import pdb; pdb.set_trace()
         for j, byte in enumerate(sprite):
             for i in range(8):
                 bit = (byte >> i) & 0x1
