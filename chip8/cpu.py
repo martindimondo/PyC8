@@ -95,14 +95,15 @@ class CPUEmulator(object):
     def _execute(self, op):
         instr = op & 0xF000 # extract the operation
         logging.debug('Instruction: 0x%02x ' % instr)
-        tmppc = self.pc
         
         if instr == 0x0:
-            sec_byte = op & 0xF
-            if sec_byte == 0x0:
+            subop = util.nn(op)
+            if subop == 0xE0:
                 self._op_clear()
-            elif sec_byte == 0xE:
+            elif subop == 0xEE:
                 self._op_pop_stack()
+            else:
+                pass #call program at op & 0x0fff address
         elif instr == 0x1000:
             self._op_jump(util.nnn(op))
         elif instr == 0x2000:
